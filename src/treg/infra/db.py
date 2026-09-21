@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from functools import cache
 from importlib import import_module
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -18,10 +19,11 @@ from ..config import get_settings
 # (Postgres/PgBouncer close idle ones, otherwise a post-idle request 500s) and a recycle window,
 # sized against the relay's concurrency so bursts don't starve the pool and time out.
 _db_url = get_settings().database_url
-_is_sqlite = "sqlite" in _db_url
+_read_db_url = get_settings().read_database_url
+_is_sqlite = _db_url.startswith("sqlite")
 
 
-# THREE POOLS, ONE DATABASE — a bulkhead. Each class of work can exhaust only its own slots, so
+# THREE PRIMARY POOLS, ONE DATABASE — a bulkhead. Each class of work can exhaust only its own slots, so
 # admin pages and background writers can no longer starve the API. Sizing is deliberately lopsided:
 # the API is the product, the other two are not. Overflow is 0 on both minor pools because overflow
 # is the escape hatch a bulkhead must not have. A pool, not a semaphore: a semaphore bounds only the
@@ -38,8 +40,9 @@ _is_sqlite = "sqlite" in _db_url
 # whole pool when this was 2 — see `_purge_expired_error_evidence`, now on `background` and
 # single-flighted so concurrent readers cannot multiply it.
 #
-# Sizes are PER INSTANCE and a rolling deploy runs two, so the SUM is what must stay under the
-# database plan's ~100 ceiling — see ops/deploy.md, and the guard test.
+# Sizes are PER PROCESS, the web service runs two uvicorn workers, and a rolling deploy runs two
+# instances, so `per_process × 2 × 2` is what must stay under the database plan's 103 ceiling —
+# see `connection_budget` below and ops/deploy.md.
 #
 # These numbers can only be validated in production: too small and real traffic gets 503s, too large
 # and the bulkhead is decorative, and no test can tell you which. `TREG_DB_POOL_OVERRIDES` makes a
@@ -48,19 +51,22 @@ _is_sqlite = "sqlite" in _db_url
 # Everything that can hold a `background` slot at the same moment. Keep this in step with reality:
 # it is what sizes the pool, and a consumer missing from it is a row silently dropped under load.
 BACKGROUND_CONSUMERS: dict[str, int] = {
-    "audit._write": 4,            # bounded by audit._MAX_CONCURRENT_WRITES
-    "archive._store/_touch": 4,   # bounded by archive._MAX_CONCURRENT_WRITES (one shared semaphore)
+    "audit._flush": 1,            # one batching writer per process (audit._MAX_CONCURRENT_WRITES)
+    "archive._store/_touch": 2,   # bounded by archive._MAX_CONCURRENT_WRITES (one shared semaphore)
     "adsconv.worker": 1,          # holds its slot across two Google round trips — see follow-ups
     "archive.prune_worker": 1,    # holds one across a whole sweep
     "archive.refresh_worker": 1,
     "catalog observation refresh": 1,   # singleflight, one task per process
     "admin evidence sweep": 1,    # single-flighted in routers/admin.py
+    "api_keys last used": 1,      # throttled best-effort managed-key display metadata
 }
 
+_PRIMARY_POOL_NAMES = ("api", "admin", "background")
 POOL_SPECS: dict[str, dict[str, int]] = {
     "api":        {"pool_size": 5, "max_overflow": 10},
     "admin":      {"pool_size": 3, "max_overflow": 0},
     "background": {"pool_size": sum(BACKGROUND_CONSUMERS.values()), "max_overflow": 0},
+    "read":       {"pool_size": 2, "max_overflow": 0},  # optional replica, a separate DB budget
 }
 
 # A pool of 0 or a negative overflow means UNLIMITED to SQLAlchemy, not "off" — `pool_size=0`
@@ -100,7 +106,36 @@ if _overrides := get_settings().db_pool_overrides:
     POOL_SPECS = _apply_overrides(POOL_SPECS, _overrides)
 
 
-def _new_engine(name: str):
+def connection_budget(workers: int | None = None) -> dict[str, int]:
+    """How many PRIMARY connections these specs can open, at the three scopes that matter.
+
+    Every number in `POOL_SPECS` is per process. The optional read pool is budgeted against its
+    target separately and is excluded here. Uvicorn may run multiple workers, and a rolling
+    deployment may briefly run two instances. Operators must compare
+    `per_process * workers * 2` with their database's `max_connections` and leave headroom.
+    """
+    per_process = sum(POOL_SPECS[name]["pool_size"] + POOL_SPECS[name]["max_overflow"]
+                      for name in _PRIMARY_POOL_NAMES)
+    if workers is None:
+        try:
+            workers = max(1, int(os.environ.get("WEB_CONCURRENCY", "1")))
+        except ValueError:
+            workers = 1
+    return {"per_process": per_process, "workers": workers,
+            "per_instance": per_process * workers, "deploy_peak": per_process * workers * 2}
+
+
+_budget = connection_budget()
+logging.getLogger("treg").info(
+    "db pools per process: api %d+%d, admin %d+%d, background %d+%d = %d; x%d workers = %d per "
+    "instance, %d at a rolling deploy; compare with the deployment database connection ceiling",
+    POOL_SPECS["api"]["pool_size"], POOL_SPECS["api"]["max_overflow"],
+    POOL_SPECS["admin"]["pool_size"], POOL_SPECS["admin"]["max_overflow"],
+    POOL_SPECS["background"]["pool_size"], POOL_SPECS["background"]["max_overflow"],
+    _budget["per_process"], _budget["workers"], _budget["per_instance"], _budget["deploy_peak"])
+
+
+def _new_engine(name: str, url: str | None = None):
     """One pooled engine per `POOL_SPECS` entry.
 
     `pool_timeout` is 5 s, not SQLAlchemy's default 30: a request that cannot get a slot is treg
@@ -109,13 +144,30 @@ def _new_engine(name: str):
     500. Slots only bound concurrent DB PHASES, which are milliseconds — a `/call/` holds no
     connection during its upstream round trip (`call_tool` commits before `relay()`)."""
     spec = POOL_SPECS[name]
+    db_url = url or _db_url
     kwargs: dict = {"future": True}
-    if not _is_sqlite:
+    is_sqlite = db_url.startswith("sqlite")
+    if not is_sqlite:
         kwargs.update(
             pool_pre_ping=True, pool_recycle=300, pool_timeout=5,
             pool_size=spec["pool_size"], max_overflow=spec["max_overflow"],
         )
-    return create_async_engine(_db_url, **kwargs)
+    if name == "read" and not is_sqlite:
+        # A guard against accidental writes, including when the URL points at a writable server.
+        # Use a replica/read-only database role as the access boundary, not this session default.
+        kwargs["connect_args"] = {"server_settings": {"default_transaction_read_only": "on"}}
+    engine = create_async_engine(db_url, **kwargs)
+    if name == "read" and is_sqlite:
+        # Keep this on the dedicated reader even when both URLs name the same SQLite file.
+        # Applying it to the shared primary engine would also disable application writes.
+        @event.listens_for(engine.sync_engine, "connect")
+        def query_only(connection, _record):
+            cursor = connection.cursor()
+            try:
+                cursor.execute("PRAGMA query_only = ON")
+            finally:
+                cursor.close()
+    return engine
 
 
 _engine = _new_engine("api")
@@ -128,6 +180,41 @@ if _is_sqlite:
     _admin_engine = _background_engine = _engine
 
 _engines = (_engine, _admin_engine, _background_engine)
+_POOL_NAMES = _PRIMARY_POOL_NAMES
+_read_engine = _new_engine("read", _read_db_url) if _read_db_url else _engine
+if _read_db_url:
+    _engines += (_read_engine,)
+    _POOL_NAMES += ("read",)
+
+
+def pool_snapshot() -> dict[str, dict[str, int]]:
+    """What each pool holds RIGHT NOW: connections checked out, of how many it may hand out.
+
+    The sizing question `POOL_SPECS` answers by arithmetic ("13 is the sum of the semaphores") can
+    only be settled by measurement; this is the measurement. `checked_out` counts slots in use
+    (persistent and overflow alike), `capacity` is `pool_size + max_overflow`. SQLite pools are
+    omitted. The optional `read` row belongs to the replica. No lock, no I/O.
+    """
+    out: dict[str, dict[str, int]] = {}
+    for name, engine in zip(_POOL_NAMES, _engines):
+        if engine.dialect.name == "sqlite":
+            continue
+        pool = engine.sync_engine.pool
+        checked_out = getattr(pool, "checkedout", None)
+        if checked_out is None:
+            continue
+        spec = POOL_SPECS[name]
+        out[name] = {"checked_out": int(checked_out()),
+                     "capacity": spec["pool_size"] + spec["max_overflow"]}
+    return out
+
+
+def fold_pool_peaks(peaks: dict[str, int], snapshot: dict[str, dict[str, int]]) -> dict[str, int]:
+    """Keep the per-pool maximum of `checked_out` seen across samples (the gauge's whole job)."""
+    for name, row in snapshot.items():
+        if row["checked_out"] > peaks.get(name, 0):
+            peaks[name] = row["checked_out"]
+    return peaks
 
 # The API pool: every request handler, through `get_session` or directly.
 session_maker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
@@ -136,6 +223,10 @@ admin_session_maker = async_sessionmaker(_admin_engine, class_=AsyncSession, exp
 # The background pool: writers that run off the request path and that no caller is awaiting.
 background_session_maker = async_sessionmaker(
     _background_engine, class_=AsyncSession, expire_on_commit=False)
+# Explicitly opted-in reads only. An unset replica aliases the existing maker; a configured
+# replica failing to connect/query raises normally and must never silently load the primary.
+read_session_maker = (async_sessionmaker(_read_engine, class_=AsyncSession, expire_on_commit=False)
+                      if _read_db_url else session_maker)
 
 
 @cache

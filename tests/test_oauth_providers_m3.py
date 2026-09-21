@@ -47,17 +47,19 @@ def test_every_provider_is_registered():
         "google-ads", "youtube", "linkedin", "slack", "x", "tiktok",
         "facebook", "instagram", "meta-ads",
         # API-key providers (auth_kind="key")
-        "apollo", "pdl", "akta", "hunter", "crunchbase", "openhandle", "tikhub", "brightdata", "semrush", "justoneapi",
+        "anyapi", "apollo", "pdl", "akta", "hunter", "sumble", "moltsets", "openmart", "harvestapi", "dropleads", "quickenrich", "prospeo", "aiark", "wiza", "limadata", "getleadsio", "scrubby", "zerobounce", "datagma", "contactout", "millionverifier", "bounceban", "trykitt", "crunchbase", "openhandle", "tikhub", "brightdata", "semrush", "justoneapi",
         "scrapecreators",
         "dataforseo", "seranking", "moz", "majestic", "serpstat", "exa",
+        "cloro",
         "lusha", "coresignal", "diffbot", "thecompaniesapi", "leadmagic", "fiber-ai",
         "companyenrich", "oceanio", "tomba", "predictleads", "findymail", "branddev",
         "icypeas", "leadsforge", "influencersclub", "crustdata", "aviato",
         "spyfu", "apify", "meta-ad-library", "serpapi",
         "coingecko", "polygon", "finnhub", "twelvedata", "fmp", "eodhd", "marketstack", "tiingo",
+        "financialdatasets",
         "microsoft-ads", "snapchat-ads", "tiktok-ads", "pinterest-ads",
         # BYOK token providers
-        "minimax", "openrouter", "replicate",
+        "minimax", "openrouter", "replicate", "reapi", "piapi",
     }
 
 

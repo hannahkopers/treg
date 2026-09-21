@@ -56,6 +56,7 @@ from treg.domain.catalog.store import COST_SOURCES as _SOURCES  # noqa: E402
 from treg.domain.catalog.store import COST_UNITS as _UNITS  # noqa: E402
 from treg.domain.catalog.store import CONFIDENCES as _CONFIDENCES  # noqa: E402
 from treg.domain.catalog.store import effective_async_descriptor  # noqa: E402
+from treg.domain.catalog.routing import paths as _paths  # noqa: E402
 
 SCOPES = {"any_account", "own_account"}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -82,7 +83,7 @@ ASYNC_PARAM_LOCATIONS = {"pathParams", "queryParams"}
 JSON_PATH = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+)(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+))*")
 # Only the unit real traffic has settled (OpenRouter's `usage.cost` in dollars). A token unit
 # returns with the first metered token-priced listing, together with its fx rule and a live test.
-USAGE_UNITS = {"usd"}
+USAGE_UNITS = {"usd", "credit"}  # credit: the provider's fx.yaml credit_rates_usd rate
 # the section heading an endpoint files under on its platform page — one lowercase word
 DOMAIN = re.compile(r"[a-z][a-z0-9_]*")
 HOST = re.compile(
@@ -195,7 +196,92 @@ def _finite_number(value: object) -> bool:
             and math.isfinite(float(value)))
 
 
-def check_cost_table(cost: dict, input_schema: object, where: str, errors: list[str]) -> None:
+def check_strict_query(ep: dict, where: str, errors: list[str]) -> None:
+    if "strict_query" not in ep:
+        return
+    if type(ep["strict_query"]) is not bool:
+        fail(errors, where, "strict_query must be a boolean")
+    if ep["strict_query"] is not True:
+        return
+    fields = (ep.get("input") or {}).get("queryParams")
+    if ep.get("method") != "GET" or not isinstance(fields, dict) or not fields:
+        fail(errors, where, "strict_query requires a GET with declared queryParams")
+        return
+    if "{" in str(ep.get("path", "")) or (ep.get("input") or {}).get("body"):
+        fail(errors, where, "strict_query cannot use path placeholders or body inputs")
+    for name, spec in fields.items():
+        if not isinstance(spec, dict):
+            fail(errors, where, f"strict query field {name} must be a mapping")
+        elif "enum" in spec and (not isinstance(spec["enum"], list) or not spec["enum"]
+                                 or any(not isinstance(v, str) for v in spec["enum"])):
+            fail(errors, where, f"strict query field {name} enum must contain strings")
+
+
+def check_strict_body(ep: dict, where: str, errors: list[str]) -> None:
+    if "strict_body" not in ep:
+        return
+    if ep["strict_body"] is not True:
+        fail(errors, where, "strict_body must be true when present")
+        return
+    fields = (ep.get("input") or {}).get("body")
+    arrays = [
+        spec for spec in (fields or {}).values()
+        if isinstance(spec, dict) and str(spec.get("type") or "").startswith("array")
+    ]
+    if ep.get("method") not in {"POST", "PUT", "PATCH"} or not arrays:
+        fail(errors, where, "strict_body requires a body method with a declared array field")
+        return
+    for spec in arrays:
+        minimum = spec.get("minItems", spec.get("min"))
+        maximum = spec.get("maxItems", spec.get("max"))
+        if not isinstance(minimum, int) or not isinstance(maximum, int) or minimum > maximum:
+            fail(errors, where, "strict_body array fields require valid integer min/max bounds")
+
+
+def check_platform_request(rule: object, input_schema: object, where: str,
+                           errors: list[str]) -> None:
+    """Platform-only fixed body values; BYOK input remains an upstream contract."""
+    if not isinstance(rule, dict) or not rule:
+        fail(errors, where, "platform_request must be a non-empty mapping")
+        return
+    fields = _input_fields(input_schema)
+    for path, value in rule.items():
+        spec = fields.get(path) if isinstance(path, str) else None
+        if not isinstance(path, str) or not path.startswith("body.") or spec is None:
+            fail(errors, where, "platform_request must name a declared body field")
+            continue
+        allowed = spec.get("enum")
+        if (not isinstance(allowed, list) or len(allowed) != 1
+                or type(value) is not type(allowed[0]) or value != allowed[0]):
+            fail(errors, where, "platform_request value must match the field's singleton enum")
+
+
+def check_platform_auth(ep: dict, where: str, errors: list[str]) -> None:
+    """Anonymous platform fallback is intentionally narrow: proven public GETs that cost zero."""
+    mode = ep.get("platform_auth")
+    if mode is None:
+        return
+    if mode != "anonymous":
+        fail(errors, where, "platform_auth must be 'anonymous'")
+        return
+    if ep.get("method") != "GET":
+        fail(errors, where, "platform_auth anonymous requires GET")
+    cost = ep.get("cost")
+    if not isinstance(cost, dict) or cost.get("type") != "free":
+        fail(errors, where, "platform_auth anonymous requires cost.type free")
+    if not ep.get("verified"):
+        fail(errors, where, "platform_auth anonymous requires live verification")
+    if ep.get("scope", "any_account") != "any_account" or ep.get("kind") == "account":
+        fail(errors, where, "platform_auth anonymous cannot expose an own-account endpoint")
+    if (ep.get("authorization_method") or ep.get("authorization_methods")
+            or ep.get("required_scopes") or ep.get("required_resource")):
+        fail(errors, where, "platform_auth anonymous cannot require provider authorization")
+    if ep.get("async") or ep.get("resource_ownership"):
+        fail(errors, where, "platform_auth anonymous cannot create or retrieve shared async resources")
+
+
+def check_cost_table(cost: dict, input_schema: object, where: str, errors: list[str],
+                     provider: str | None = None) -> None:
     """Validate a first-match AIGC price table and its explicit reserve upper bound."""
     table = cost.get("table")
     if not isinstance(table, list) or not table:
@@ -303,6 +389,9 @@ def check_cost_table(cost: dict, input_schema: object, where: str, errors: list[
                 or not isinstance(usage.get("path"), str) or not JSON_PATH.fullmatch(usage["path"]) \
                 or usage.get("unit") not in USAGE_UNITS:
             fail(errors, where, "cost.settle 'usage' requires usage.path and usage.unit")
+        elif usage.get("unit") == "credit" and not _finite_number(_credit_rate(provider)):
+            fail(errors, where, f"usage.unit 'credit' needs a numeric fx.yaml credit_rates_usd entry "
+                                f"for '{provider}'")
     elif usage is not None:
         fail(errors, where, "cost.usage is only valid with settle: usage")
 
@@ -460,8 +549,14 @@ def check_resource_ownership(rule: object, where: str, input_schema: object,
                     fail(errors, where, "each resource_ownership.produces item needs exactly kind and JSON path")
 
 
+def _credit_rate(provider: str | None) -> object:
+    fx = yaml.safe_load((CATALOG / "fx.yaml").read_text()) or {}
+    entry = (fx.get("credit_rates_usd") or {}).get(provider or "")
+    return entry.get("usd") if isinstance(entry, dict) else entry
+
+
 def check_cost(cost: dict, where: str, errors: list[str], warnings: list[str],
-               input_schema: object = None) -> None:
+               input_schema: object = None, provider: str | None = None) -> None:
     """The price block's own rules — the ones that make a figure BILLABLE rather than decorative.
 
     A platform key spends treg's money on a caller's behalf, so every number here has to answer
@@ -482,11 +577,70 @@ def check_cost(cost: dict, where: str, errors: list[str], warnings: list[str],
     per = cost.get("per")
     if per is not None and (not isinstance(per, int) or isinstance(per, bool) or per < 1):
         fail(errors, where, f"cost.per '{per}' must be a positive integer (the quantity `value` covers)")
+    reported = cost.get("reported_charge")
+    if reported is not None:
+        if (not isinstance(reported, dict) or set(reported) != {"path", "unit"}
+                or not isinstance(reported.get("path"), str)
+                or not JSON_PATH.fullmatch(reported["path"]) or reported.get("unit") != "usd"):
+            fail(errors, where, "cost.reported_charge requires a JSON path and unit: usd")
+        if "table" in cost or "settle" in cost or cost.get("type") == "free":
+            fail(errors, where, "cost.reported_charge requires a paid scalar price without cost.settle")
+    if "display" in cost:
+        display = cost["display"]
+        if (not isinstance(display, dict) or not isinstance(display.get("unit"), str)
+                or not display["unit"].strip() or len(display["unit"]) > 40
+                or set(display) - {"unit", "grouped", "round_up", "variable"}):
+            fail(errors, where, "cost.display requires a short unit and optional grouped/round_up/variable flags")
+        else:
+            for flag in {"grouped", "round_up", "variable"} & set(display):
+                if type(display[flag]) is not bool:
+                    fail(errors, where, f"cost.display.{flag} must be boolean")
+            if display.get("round_up") and not display.get("grouped"):
+                fail(errors, where, "cost.display.round_up requires grouped")
+            if display.get("grouped") and (type(cost.get("per")) is not int or cost["per"] <= 0):
+                fail(errors, where, "cost.display.grouped requires positive integer cost.per")
+        if cost.get("type") == "free" or "table" in cost:
+            fail(errors, where, "cost.display requires a scalar paid price")
+    if "sumble" in cost:
+        rule = cost["sumble"]
+        modes = {"single": set(), "results": {"reserve_results"},
+                 "lookup": {"records", "block_size", "max_records"},
+                 "compose": {"records", "base", "attribute", "metric", "free_attributes",
+                             "safe_attributes", "max_records", "default_limit", "max_limit"}}
+        mode = rule.get("mode") if isinstance(rule, dict) else None
+        if mode not in modes or set(rule) != {"mode"} | modes.get(mode, set()):
+            fail(errors, where, "cost.sumble must declare exactly the fields for a supported mode")
+        else:
+            for key in modes[mode] - {"records", "free_attributes", "safe_attributes"}:
+                if type(rule[key]) is not int or rule[key] <= 0:
+                    fail(errors, where, f"cost.sumble.{key} must be a positive integer")
+            for key in {"free_attributes", "safe_attributes"} & modes[mode]:
+                if not isinstance(rule[key], list) or any(not isinstance(v, str) for v in rule[key]):
+                    fail(errors, where, f"cost.sumble.{key} must be a string list")
+            if "records" in rule and (not isinstance(rule["records"], str)
+                                      or not re.fullmatch(r"[a-z_]+", rule["records"])):
+                fail(errors, where, "cost.sumble.records must name a body array")
+        if mode == "lookup" and isinstance(rule, dict) and rule.get("block_size") != cost.get("per"):
+            fail(errors, where, "cost.sumble.block_size must equal cost.per")
+        if cost.get("currency") != "credit" or cost.get("value") != 1:
+            fail(errors, where, "cost.sumble requires a one-credit base price")
+    if "contactout" in cost:
+        rule = cost["contactout"]
+        jobs = {"contact", "person", "email", "linkedin", "search", "decision",
+                "company_search", "domains", "reverse"}
+        rates = rule.get("rates_micro") if isinstance(rule, dict) else None
+        if not isinstance(rule, dict) or rule.get("job") not in jobs:
+            fail(errors, where, "cost.contactout needs a supported job")
+        if not isinstance(rates, dict) or set(rates) != {"work_email", "personal_email", "phone", "search"} \
+                or any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in rates.values()):
+            fail(errors, where, "cost.contactout.rates_micro needs four positive integer micro-USD rates")
+        if cost.get("currency") != "USD":
+            fail(errors, where, "cost.contactout requires USD")
     has_table = "table" in cost
     if has_table:
         if "value" in cost:
             fail(errors, where, "cost.value and cost.table are mutually exclusive")
-        check_cost_table(cost, input_schema, where, errors)
+        check_cost_table(cost, input_schema, where, errors, provider)
     if (settle := cost.get("settle")) is not None and not has_table \
             and settle not in ("base", "modifiers"):
         fail(errors, where, "cost.settle currently supports only 'base' or 'modifiers'")
@@ -753,6 +907,16 @@ def main(argv: list[str]) -> int:
             for f in REQUIRED[tier]:
                 if not ep.get(f):
                     fail(errors, where, f"missing required field '{f}'")
+            miss = ep.get("miss")
+            if isinstance(miss, dict) and miss.get("when") is not None:
+                # The router evaluates `when` against the provider body; a misspelt path parses
+                # fine, evaluates False on every body, and silently turns every declared miss back
+                # into an error. Require a comparison or a call the expression language accepts.
+                when = miss["when"]
+                if not isinstance(when, str) or not (_paths._CMP.match(when.strip()) or _paths._CALL.match(when.strip())):
+                    fail(errors, where, f"miss.when must be a comparison or call in the adapter expression language, got {when!r}")
+                elif miss.get("status") is None:
+                    fail(errors, where, "miss.when needs miss.status (the 4xx it narrows)")
             if eid in seen_ids:
                 fail(errors, where, f"duplicate id (also in {seen_ids[eid]})")
             seen_ids[eid] = name
@@ -787,8 +951,22 @@ def main(argv: list[str]) -> int:
                 fail(errors, where, f"bad scope '{ep.get('scope')}'")
             if ep.get("method") not in METHODS:
                 fail(errors, where, f"bad method '{ep.get('method')}'")
+            host = ep.get("host")
+            if host is not None:
+                if not isinstance(host, str) or not HOST.fullmatch(host):
+                    fail(errors, where, "host must be one DNS hostname without a scheme, port, or path")
+                elif (provider_config := REGISTRY.get(service)) and provider_config.catalog_targets:
+                    try:
+                        provider_config.profile_for_catalog_host(host)
+                    except ValueError:
+                        fail(errors, where, f"host '{host}' is not an approved catalog target for '{service}'")
             check_status_marker(ep, where, endpoint_status, errors)
             inp = ep.get("input") or {}
+            check_strict_query(ep, where, errors)
+            check_strict_body(ep, where, errors)
+            check_platform_auth(ep, where, errors)
+            if "platform_request" in ep:
+                check_platform_request(ep["platform_request"], inp, where, errors)
             default_array_encoding = inp.get("queryArrayEncoding")
             if (default_array_encoding is not None
                     and default_array_encoding not in QUERY_ARRAY_ENCODINGS):
@@ -803,7 +981,7 @@ def main(argv: list[str]) -> int:
                 if not isinstance(cost, dict):
                     fail(errors, where, f"cost.type missing or not one of {sorted(COST_TYPES)}")
                 else:
-                    check_cost(cost, where, errors, warnings, inp)
+                    check_cost(cost, where, errors, warnings, inp, provider)
             effective_async = effective_async_descriptor(data.get("async"), ep.get("async"))
             if effective_async is not None:
                 check_async_descriptor(effective_async, where, str(service), endpoint_index,

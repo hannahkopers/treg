@@ -31,7 +31,7 @@ transitional `api.py` re-export retired with the rest of the stage-3 compatibili
 
 **On the admin pool.** The gate takes `Depends(get_admin_session)`, and so does every `/admin/*`
 handler it guards — 3 connections, no overflow, separate from the API's
-(`ops/deploy.md` § Three pools). It must be the SAME dependency callable on both: FastAPI caches
+(`ops/deploy.md` § Database pools). It must be the SAME dependency callable on both: FastAPI caches
 dependencies per request by identity, so a gate on `get_session` would put admin traffic back on the
 API pool through the back door. Staff pages are therefore bounded by construction — a panel that
 polls itself into saturation costs admins their own 503s, not the product's.
@@ -46,6 +46,10 @@ suspended") or `org.suspended` ("org suspended"). Set by the admin endpoints bel
 endpoints are unaffected (they use `require_superadmin`).
 
 ## Endpoints (all under `/admin/*`, gated by `require_superadmin`)
+
+- **Feedback:** `GET /admin/feedback` (`routers.feedback.admin_feedback`) returns private reports,
+  filtered by optional category, with `limit` and descending-ID `before` pagination. It shares
+  `get_admin_session` with the super-admin gate. See [feedback](feedback.md).
 - **Reads:** `admin_stats` (totals, `tools_by_injector`/`tools_by_host`, `credential_health` rollup,
   call volume + success rate, `growth` counts — computed in-process over small result sets),
   `admin_orgs` (every org + member/role/tool/secret/bundle counts), `admin_org_detail`,

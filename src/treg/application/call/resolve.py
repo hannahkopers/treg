@@ -135,6 +135,21 @@ async def _resolve_call(rest: str, caller: Caller, db: AsyncSession) -> Resolved
     ).scalar_one_or_none()
     if tool is None:
         cat = catalog_store.load()
+        # An EXACT catalog id followed by a URL path (`reapi.tasks.get/tasks/<id>`) is the own-tool
+        # shape applied to the catalog half: the caller had the right id and wrote the vendor's path
+        # by hand. "no tool in this org" sends them hunting in the wrong half of treg; name the
+        # endpoint's real parameter slots instead so the next call is the right one.
+        if path and (ep := cat.by_id.get(name)) is not None:
+            inp = ep.get("input") or {}
+            slots = sorted({k for sec in ("pathParams", "queryParams", "query", "body")
+                            for k in (inp.get(sec) or {})})
+            raise ResolutionFailed(
+                "invalid_target", status_code=400, detail={
+                    "error": f"{name!r} is a catalog endpoint and takes no URL path",
+                    "hint": (f"pass parameters as --query K=V (path and query params) or --data "
+                             f"'{{…}}' (body): treg call {name} --query <k>=<v>"
+                             + (f"; parameters: {', '.join(slots)}" if slots else "")),
+                    "parameters": slots})
         # A DOTTED name that reached here was meant to be a catalog endpoint id and missed — a
         # near-miss id, most often one segment off. Answering "no tool 'lusha.companies-signals' in
         # this org" describes the wrong half of treg and leaves the caller nothing to try; naming
@@ -298,9 +313,10 @@ class MarketplaceCall:
     consumed: set[str]              # query params eaten by `{placeholder}` path substitution
     endpoint_id: str
     provider: str
-    tier: str                       # tool | credential | platform | platform-overflow (child cycle only)
+    tier: str                       # tool | credential | anonymous | platform | platform-overflow
     cost_type: str = ""             # cost.type — decides whether a 4xx is billable (per_call is)
     estimate_micro: int = 0         # RAW provider estimate; the ledger applies the margin
+    max_cost_micro: int | None = None  # remaining caller ceiling, inherited by overflow
     params_hash: str = ""
     call_id: str | None = None      # the ledger hold, once reserved (metered calls only)
     # The call rides a REGISTRY OAUTH CONNECT of a provider that bills treg's app per use (X's
@@ -324,11 +340,31 @@ class MarketplaceCall:
     probe_lock_id: str | None = None
 
     @property
+    def free_owned_poll(self) -> bool:
+        """A free status read authorized against this org's durable submission."""
+        return (self.tier == "platform" and self.async_owner_call_id is not None
+                and self.cost_type == "free" and self.estimate_micro == 0
+                and not self.billed_oauth)
+
+    @property
+    def streamable_free_result(self) -> bool:
+        """An authorized final fetch with no body evidence to settle or learn."""
+        ownership = self.resource_ownership or {}
+        required = ownership.get("requires") or {}
+        return (self.tier == "platform" and self.cost_type == "free"
+                and self.estimate_micro == 0 and not self.billed_oauth
+                and self.async_owner_call_id is None and not self.async_descriptor
+                and not ownership.get("produces")
+                and str(required.get("kind", "")).startswith("fetch:"))
+
+    @property
     def metered(self) -> bool:
         """True when OUR money is at stake: treg's platform key (tier 4), or an org credential that
         rides treg's pay-per-use OAuth app (`billed_oauth`). Tiers 1/2 on a provider that bills the
-        account owner stay unmetered — there the org's own account pays."""
-        return self.tier in ("platform", "platform-overflow") or self.billed_oauth
+        account owner stay unmetered; there the org's own account pays. An owned free poll reads
+        an existing task without reserving or settling money again."""
+        return ((self.tier in ("platform", "platform-overflow") or self.billed_oauth)
+                and not self.free_owned_poll)
 
 
 # A `per_result` price is per ROW, so an estimate needs a row count. The caller's own limit param is
@@ -338,7 +374,7 @@ _PLATFORM_PAGE_DEFAULT = 20
 _PLATFORM_PAGE_MAX = 100
 _LIMIT_PARAMS = ("limit", "count", "depth", "page_size", "per_page", "num", "max_results", "size",
                  "pageSize", "perPage", "numResults", "maxResults",
-                 "contactsLimit")  # camelCase: companyenrich, exa, lusha; contactsLimit: lusha decision-makers
+                 "contactsLimit")  # camelCase: companyenrich, exa, lusha; contactsLimit: lusha buying-group
 
 
 # Units that name an INPUT entity rather than a returned row: the caller pays per thing they asked
@@ -412,8 +448,8 @@ def _body_limit(body: bytes) -> int | None:
         val = doc.get(name)
         if isinstance(val, int) and not isinstance(val, bool) and val > 0:
             return val
-    for name in ("targets", "keywords", "domains", "urls", "lookups", "emails"):
-        val = doc.get(name)  # one row per item: moz targets, dataforseo keywords, companyenrich domains, brightdata urls
+    for name in ("targets", "keywords", "domains", "urls", "lookups", "emails", "contacts", "companies"):
+        val = doc.get(name)  # one row per item: moz targets, dataforseo keywords, companyenrich domains, brightdata urls, lusha contacts/companies
         if isinstance(val, list) and val:
             return len(val)
     # icypeas / lusha: {"pagination": {"size": 10}}; influencersclub: {"paging": {"limit": 10}} —
@@ -429,6 +465,23 @@ def _body_limit(body: bytes) -> int | None:
     return items
 
 
+def _body_text_characters(body: bytes) -> int:
+    """Count the provider-facing ``text`` field for character-priced generation calls.
+
+    The catalog price is already normalized to USD per character. Invalid JSON or a missing text
+    field reserves one unit rather than zero; platform request validation/provider rejection still
+    decides whether the call is relayed or charged.
+    """
+    if body:
+        try:
+            document = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            document = None
+        if isinstance(document, dict) and isinstance(document.get("text"), str):
+            return max(1, len(document["text"]))
+    return 1
+
+
 def _platform_estimate_micro(cost: dict, query, body: bytes = b"") -> int:
     """What one call is expected to cost the platform, in RAW micro-USD (no margin — ledger.reserve
     applies that). Rounds UP: a fraction of a micro-dollar is not representable and must not round to
@@ -437,7 +490,9 @@ def _platform_estimate_micro(cost: dict, query, body: bytes = b"") -> int:
     if usd is None:
         return 0
     n = 1
-    if cost.get("type") in ("per_result", "quota_rows") and cost.get("unit") in _ENTITY_UNITS:
+    if cost.get("unit") == "character":
+        n = _body_text_characters(body)
+    elif cost.get("type") in ("per_result", "quota_rows") and cost.get("unit") in _ENTITY_UNITS:
         # Priced per INPUT entity, not per returned row: the page-size default below has no
         # meaning here and billed one-target calls 20x (seranking summary, serpstat overview —
         # 2026-09-05). The request names how many entities it asks about.
@@ -477,6 +532,45 @@ def _usd_to_micro(usd: float) -> int:
 def _truthy(value) -> bool:
     """Provider query/body booleans arrive as strings or JSON booleans; interpret both."""
     return value is True or (isinstance(value, str) and value.strip().lower() in ("1", "true", "yes"))
+
+
+_OPENMART_METERED_ENDPOINTS = frozenset({
+    "openmart.businesses.search",
+    "openmart.businesses.lookup.openmart",
+    "openmart.businesses.lookup.google-place",
+    "openmart.companies.enrich",
+    "openmart.companies.search",
+})
+_OPENMART_LOOKUP_ENDPOINTS = frozenset({
+    "openmart.businesses.lookup.openmart",
+    "openmart.businesses.lookup.google-place",
+})
+_OPENMART_PLATFORM_MAX_RECORDS = 25
+
+
+def _openmart_credits(records: int) -> int:
+    """Openmart bills 3 credits per 10 returned records, rounded up per operation."""
+    return 0 if records <= 0 else (3 * records + 9) // 10
+
+
+def _openmart_requested_records(endpoint_id: str, body: bytes) -> int | None:
+    """Read the requested Openmart result ceiling without changing a BYOK request."""
+    if not body:
+        return None
+    try:
+        document = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if endpoint_id in _OPENMART_LOOKUP_ENDPOINTS:
+        return len(document) if isinstance(document, list) else None
+    if not isinstance(document, dict):
+        return None
+    if endpoint_id == "openmart.companies.search":
+        pagination = document.get("pagination")
+        value = pagination.get("limit") if isinstance(pagination, dict) else None
+    else:
+        value = document.get("limit")
+    return value if type(value) is int else None
 
 
 def _json_object(body: bytes) -> dict:
@@ -539,14 +633,71 @@ def _marketplace_pricing(
     """Return (reserve estimate, response-count unit), in raw micro-USD.
 
     The catalog remains the price source. This helper only models provider rules that one fixed
-    scalar cannot express: Crustdata batch-shaped single calls and Aviato preview/add-on/bulk modes.
+    scalar cannot express: provider batch shapes and request-dependent modes.
     `unit` is non-zero only when the response must decide the final charge.
     """
     if not cost:
         return 0, 0
+    if provider == "openmart" and endpoint_id in _OPENMART_METERED_ENDPOINTS:
+        rate = catalog_store.load().credit_rates.get("openmart")
+        if rate:
+            requested = _openmart_requested_records(endpoint_id, body)
+            bounded = max(1, min(requested or _OPENMART_PLATFORM_MAX_RECORDS,
+                                 _OPENMART_PLATFORM_MAX_RECORDS))
+            credit_micro = _usd_to_micro(rate)
+            return _openmart_credits(bounded) * credit_micro, credit_micro
+    if provider == "sumble" and cost.get("sumble"):
+        from . import sumble
+        credit = _usd_to_micro(float(cost.get("usd") or 0) * int(cost.get("per") or 1))
+        return sumble.estimate(cost["sumble"], _json_object(body)) * credit, credit
+    if provider == "contactout":
+        from . import contactout
+        request = _json_object(body) if body else dict(query.multi_items())
+        return contactout.estimate(cost, request), 0
+    if provider == "dropleads":
+        doc = _json_object(body)
+        rate = float(cost.get("usd") or 0)
+        unit = _usd_to_micro(rate)
+        if endpoint_id == "dropleads.companies.enrich":
+            domains = doc.get("domains") if isinstance(doc.get("domains"), list) else []
+            names = doc.get("companyNames") if isinstance(doc.get("companyNames"), list) else []
+            # More than 50 is rejected before charging; reserve the maximum valid request.
+            return _usd_to_micro(rate * max(1, min(len(domains) + len(names), 50))), unit
+        if endpoint_id == "dropleads.companies.search":
+            nested = doc.get("pagination") if isinstance(doc.get("pagination"), dict) else {}
+            raw = nested.get("limit", 20)
+            asked = int(str(raw).strip()) if not isinstance(raw, bool) \
+                and str(raw).strip().isdigit() else 20
+            asked = max(1, min(asked, 50))
+            return _usd_to_micro(rate * asked), unit
     estimate = _platform_estimate_micro(cost, query, body)
-    unit = (_usd_to_micro(cost["usd"])
-            if cost.get("type") in ("per_result", "quota_rows") and cost.get("usd") else 0)
+    credit_rate = (catalog_store.load().credit_rates.get(provider)
+                   if cost.get("currency") == "credit" else None)
+    if credit_rate and cost.get("type") in ("per_result", "quota_rows"):
+        unit = _usd_to_micro(credit_rate)
+    elif cost.get("type") == "per_success" and cost.get("usd"):
+        unit = _usd_to_micro(cost["usd"])
+    else:
+        unit = (_usd_to_micro(cost["usd"])
+                if cost.get("type") in ("per_result", "quota_rows") and cost.get("usd") else 0)
+    if provider == "quickenrich":
+        credit = _usd_to_micro(float(cost.get("usd") or 0))
+        if endpoint_id == "quickenrich.people.search.domain":
+            # Fixed 20-row page; title queries charge each contactable employee, otherwise one page.
+            return credit * (20 if query.get("title") else 1), credit
+        if endpoint_id == "quickenrich.companies.search":
+            doc = _json_object(body)
+            size = doc.get("per_page", 10)
+            size = max(1, min(size, 100)) if type(size) is int else 100
+            return size * credit, credit
+        return estimate, credit
+    if provider == "tomba" and endpoint_id == "tomba.companies.emails.list":
+        # Tomba bills requested page slots in blocks of ten, with a ten-slot default.
+        # A partial non-empty page still costs the full block; settlement frees empty pages.
+        raw = query.get("limit")
+        size = int(str(raw)) if raw is not None and str(raw).isdigit() else 10
+        credit = _usd_to_micro(float(cost.get("usd") or 0))
+        return max(1, (size + 9) // 10) * credit, credit
     if provider == "crustdata" and endpoint_id in (
         "crustdata.companies.enrich", "crustdata.people.enrich"
     ):
@@ -555,10 +706,25 @@ def _marketplace_pricing(
             "domains", "names", "professional_network_profile_urls", "business_emails"
         ))
         return _usd_to_micro(float(cost.get("usd") or 0) * count), unit
-    if provider != "aviato":
+    if provider == "hunter" and endpoint_id == "hunter.companies.emails":
+        # Hunter charges 1 search credit per 10 emails RETURNED, rounded UP — not linear per-email.
+        # The settle logic uses ceil(emails/10); the estimate must match to avoid billing mismatch.
+        # With limit=1 returning 1 email: linear estimate would be $0.00245, but settle is 1 credit
+        # = $0.0245 — a 10x overbill. Use the same rounding here.
+        raw = query.get("limit")
+        asked = int(str(raw)) if raw is not None and str(raw).isdigit() else 10  # Hunter's default
+        asked = max(1, min(asked, 100))  # Hunter's max
+        rate = catalog_store.load().credit_rates.get("hunter")
+        if rate:
+            credits = -(-asked // 10)  # ceil division: whole credits, minimum 1
+            return _usd_to_micro(credits * rate), _usd_to_micro(rate)
+        return estimate, unit
+    if provider != "aviato" and not cost.get("modifiers"):
         return estimate, unit
 
-    rate = catalog_store.load().credit_rates.get("aviato")
+    # Credit-priced providers with a `cost.modifiers` block (Aviato, cloro): the request decides
+    # the price, so the reserve is base + every triggered rider, converted at the provider's rate.
+    rate = credit_rate
     if not rate:
         return estimate, unit
     def credit_micro(credits):
@@ -712,14 +878,19 @@ def _platform_bindings(provider) -> list[dict]:
     (`_provider_bindings`), except the value is named rather than carried — `relay` reads
     `platform_setting` from settings at call time. That is the whole security model: treg's key is
     never written to a Secret row (unreadable by the tenant, unexportable by a local run, and
-    `api.py`'s cross-org secret check would reject it anyway)."""
+    `api.py`'s cross-org secret check would reject it anyway).
+
+    `token_encode` is carried for HTTP Basic providers so the injector can ensure Base64 encoding,
+    matching `_provider_bindings` for tiers 1/2. Platform settings should already be encoded, but
+    carrying the attribute costs nothing and keeps the contract explicit."""
     setting = platform_setting_name(provider.service)
+    encode_attr = {"token_encode": provider.token_encode} if provider.token_encode else {}
     if provider.token_location == "query":
         bindings = [{"platform_setting": setting, "injector": "env", "location": "query",
-                     "name": provider.token_param, "format": provider.token_format}]
+                     "name": provider.token_param, "format": provider.token_format, **encode_attr}]
     else:
         bindings = [{"platform_setting": setting, "injector": "env", "location": "header",
-                     "name": provider.token_header, "format": provider.token_format}]
+                     "name": provider.token_header, "format": provider.token_format, **encode_attr}]
     # Keep tier 4 protocol-identical to BYOK. Required provider headers are constants, but they
     # still use the same platform setting reference so the normal binding validator and injector
     # own the whole shape. Crustdata's x-api-version pin is the first provider that needs this.
@@ -745,7 +916,7 @@ def _platform_offer(ep: dict, provider, org: Org) -> dict | None:
     OAuth provider (a platform key is meaningless for one: the credential is a user's own account),
     or a demo org (the sandbox and the public demo must never be able to spend real money — the
     landing page is reachable by anyone with the URL)."""
-    if not provider.uses_pasted_secret:
+    if ep.get("platform_auth") == "anonymous" or not provider.uses_pasted_secret:
         return None
     cat = catalog_store.load()
     if not cat.platform_eligible(ep):
@@ -755,6 +926,26 @@ def _platform_offer(ep: dict, provider, org: Org) -> dict | None:
     if demo_sandbox.is_sandbox(org) or org.public_demo:
         return None
     return cat.cost_view(ep.get("cost"), ep["provider"]) or None
+
+
+def _anonymous_offer(ep: dict, org: Org) -> dict | None:
+    """A free catalog fallback that relays without any provider credential.
+
+    The team's own tool or credential is resolved before this function is reached, so the normal
+    own-key precedence remains intact. The deployment provider allow-list is still the kill switch.
+    Catalog validation confines this mode to verified, free, read-only endpoints.
+    """
+    if ep.get("platform_auth") != "anonymous":
+        return None
+    cat = catalog_store.load()
+    if not cat.platform_eligible(ep):
+        return None
+    if not get_settings().platform_provider_enabled(ep["provider"]):
+        return None
+    if demo_sandbox.is_sandbox(org) or org.public_demo:
+        return None
+    cost = cat.cost_view(ep.get("cost"), ep["provider"])
+    return cost if cost and cost.get("type") == "free" else None
 
 
 def _capability_alternatives(ep: dict, *, limit: int = 3) -> list[str]:
@@ -847,7 +1038,10 @@ def _marketplace_upstream(
         # Agents often pass `siteUrl` straight from GSC's sites list, where it may already be
         # encoded. Preserve a value containing a real %HH escape; otherwise encode it exactly once.
         # A literal/invalid percent sequence has no valid escape and therefore becomes `%25`.
-        rendered = value if _VALID_PERCENT_ESCAPE_RE.search(value) else quote(value, safe="")
+        # @ is a legal character inside a path segment (RFC 3986 pchar), not a path/query
+        # delimiter. Email-path APIs may validate it before percent-decoding (Tomba does).
+        # Keep it literal; slashes, ?, # and other delimiters still need escaping.
+        rendered = value if _VALID_PERCENT_ESCAPE_RE.search(value) else quote(value, safe="@")
         path = path.replace("{%s}" % name, rendered)
         consumed.add(name)
     required = [k for k, v in (inp.get("queryParams") or {}).items()
@@ -919,15 +1113,105 @@ def _document_value(document: object, dotted: str) -> object:
     return current
 
 
-def _enforce_platform_pricing_selectors(ep: dict, body: bytes) -> None:
-    """Bind a platform-priced row to its fixed request discriminator before reserve/relay.
+def _enforce_catalog_query(ep: dict, query: QueryValues, has_body: bool) -> None:
+    """Opt-in catalog contract on every credential tier; raw own-tool relays are unaffected.
+
+    A strict GET tool accepts only its declared query fields, once each. No request is rewritten,
+    and invalid values are never echoed (they may be accidentally supplied session credentials).
+    """
+    if not ep.get("strict_query"):
+        return
+    fields = (ep.get("input") or {}).get("queryParams") or {}
+    values: dict[str, str] = {}
+    invalid = has_body
+    for name, value in query.multi_items():
+        spec = fields.get(name)
+        if name in values or not isinstance(spec, dict):
+            invalid = True
+        elif spec.get("enum") is not None and value not in spec["enum"]:
+            invalid = True
+        values[name] = value
+    if any(spec.get("required") and not values.get(name) for name, spec in fields.items()):
+        invalid = True
+    if invalid:
+        raise ResolutionFailed(
+            "catalog_parameter_invalid", status_code=400,
+            detail={"error": "catalog_parameter_invalid", "endpoint_id": ep["id"],
+                    "message": "Use only the declared query parameters and allowed values, once each; "
+                               "include required parameters and omit the request body."},
+        )
+
+
+def _enforce_catalog_body(ep: dict, body: bytes) -> None:
+    """Enforce opt-in array cardinality without rewriting a catalog request.
+
+    Most catalog schemas describe the upstream API and deliberately leave BYOK requests as a
+    faithful relay. ``strict_body`` is the narrow exception for a catalog tool whose advertised
+    contract is intentionally smaller than the upstream surface. Array limits are read from the
+    existing input declaration and applied on every credential tier.
+    """
+    if not ep.get("strict_body"):
+        return
+    document = _strict_json_object(body, ep["id"])
+    fields = (ep.get("input") or {}).get("body") or {}
+    for name, spec in fields.items():
+        if not isinstance(spec, dict) or not str(spec.get("type") or "").startswith("array"):
+            continue
+        value = document.get(name)
+        minimum = spec.get("minItems", spec.get("min"))
+        maximum = spec.get("maxItems", spec.get("max"))
+        valid = isinstance(value, list)
+        if valid and isinstance(minimum, int):
+            valid = len(value) >= minimum
+        if valid and isinstance(maximum, int):
+            valid = len(value) <= maximum
+        if not valid:
+            expected = (
+                f"between {minimum} and {maximum}" if minimum != maximum
+                else f"exactly {minimum}"
+            )
+            raise ResolutionFailed(
+                "catalog_parameter_invalid", status_code=400, detail={
+                    "error": "catalog_parameter_invalid",
+                    "endpoint_id": ep["id"],
+                    "parameter": f"body.{name}",
+                    "message": f"{ep['id']} requires {expected} item in body.{name}",
+                },
+            )
+
+
+def _enforce_platform_request(ep: dict, body: bytes) -> None:
+    """Check explicit platform constraints and fixed pricing selectors before reserve/relay.
 
     Catalog tables may price several rows on one upstream path. A table condition whose body field
     has a singleton enum is the row identity, not caller choice: accepting another value lets a cheap
     row reserve for an expensive model. Full schema validation remains out of the faithful BYOK path.
     """
+    if ep.get("provider") == "openmart" and ep.get("id") in _OPENMART_METERED_ENDPOINTS:
+        requested = _openmart_requested_records(ep["id"], body)
+        parameter = (
+            "body" if ep["id"] in _OPENMART_LOOKUP_ENDPOINTS
+            else "body.pagination.limit" if ep["id"] == "openmart.companies.search"
+            else "body.limit"
+        )
+        if requested is None or not 1 <= requested <= _OPENMART_PLATFORM_MAX_RECORDS:
+            raise ResolutionFailed(
+                "catalog_parameter_invalid", status_code=400, detail={
+                    "error": "catalog_parameter_invalid",
+                    "endpoint_id": ep["id"],
+                    "parameter": parameter,
+                    "message": (
+                        "Openmart platform calls require an explicit result count from 1 to 25; "
+                        "connect your own key for the upstream limit"
+                    ),
+                },
+            )
+
     input_schema = ep.get("input") or {}
-    selectors: dict[str, object] = {}
+    selectors: dict[str, object] = {
+        path.removeprefix("body."): value
+        for path, value in (ep.get("platform_request") or {}).items()
+    }
     for row in (ep.get("cost") or {}).get("table") or []:
         for path in (row.get("when") or {}):
             if not str(path).startswith("body."):
@@ -942,7 +1226,7 @@ def _enforce_platform_pricing_selectors(ep: dict, body: bytes) -> None:
     document = _strict_json_object(body, ep["id"])
     for path, expected in sorted(selectors.items()):
         actual = _document_value(document, path)
-        if actual != expected:
+        if actual != expected or (isinstance(expected, bool) and type(actual) is not bool):
             raise ResolutionFailed(
                 "catalog_parameter_invalid", status_code=400, detail={
                     "error": "catalog_parameter_invalid",
@@ -951,7 +1235,7 @@ def _enforce_platform_pricing_selectors(ep: dict, body: bytes) -> None:
                     "expected": expected,
                     "message": (
                         f"{ep['id']} fixes body.{path} to {expected!r}; "
-                        "choose the catalog endpoint for the requested value"
+                        "use the required value for a platform call"
                     ),
                 },
             )
@@ -1214,6 +1498,7 @@ async def _resolve_marketplace_call(
     ladder. Annotated endpoints select by provider plus grant method. That generic identity avoids
     ambiguous same-host tools without teaching the faithful relay about Instagram or Meta.
     """
+    _enforce_catalog_query(ep, query, has_body)
     await _enforce_capability_pin(ep, caller, db)
     _enforce_catalog_status(ep)
     service = ep["provider"]
@@ -1263,8 +1548,19 @@ async def _resolve_marketplace_call(
         _preflight_authorization(ep, chosen_secret, chosen_method, authorization)
         provider = provider.profile_for_authorization(chosen_method)
 
+    endpoint_host = str(ep.get("host") or "").strip().lower()
+    if endpoint_host and provider.catalog_targets:
+        try:
+            provider = provider.profile_for_catalog_host(endpoint_host)
+        except ValueError as exc:
+            raise ResolutionFailed(
+                "injection_failed", status_code=502,
+                detail=f"{ep['id']} declares an upstream host that is not approved for {service}",
+            ) from exc
+
     upstream, consumed = _marketplace_upstream(ep, provider, query, chosen_method)
     body = await read_body() if has_body else b""
+    _enforce_catalog_body(ep, body)
     phash = _params_hash(ep["id"], query.multi_items(), body)
     # The catalog's estimate travels on EVERY tier - informational on tiers 1/2 (the provider bills
     # the org's own account; Activity shows "estimated") and the reserve amount on tier 4 only
@@ -1277,10 +1573,14 @@ async def _resolve_marketplace_call(
         query.multi_items(), body, path_names=consumed)
     unit_view = cat.cost_view({**raw_cost, "value": 1, "per": 1}, service) if raw_cost else None
     unit_micro = _usd_to_micro(unit_view.get("usd")) if unit_view else 0
+    usage_unit_micro = None
+    if (raw_cost.get("usage") or {}).get("unit") == "credit":
+        # One provider credit in micro-USD, from fx.yaml; the validator guarantees the entry.
+        usage_unit_micro = _usd_to_micro(cat.credit_rates.get(service))
     basis = settlement_basis.derive_basis(
         raw_cost, request=request_data, input_schema=ep.get("input") or {},
         unit_micro=unit_micro, terminal=bool(ep.get("async")),
-        response_estimate_micro=info_est,
+        response_estimate_micro=info_est, usage_unit_micro=usage_unit_micro,
     )
     if basis.get("amount", {}).get("kind") in ("table", "usage"):
         info_est = int(basis["reserve_micro"])
@@ -1315,13 +1615,57 @@ async def _resolve_marketplace_call(
         )
         return MarketplaceCall(tool=virtual, tier="credential", **common)
 
+    # Generic public-upstream fallback. It comes after both own-key tiers, so a team's credential
+    # still wins, and before tier 4 because no treg provider credential or money is needed. The
+    # empty binding list is the whole behavior: the normal faithful relay sends the caller's
+    # request without inventing an Authorization or provider-key header.
+    anonymous_cost = _anonymous_offer(ep, caller.org)
+    if anonymous_cost is not None:
+        _enforce_platform_request(ep, body)
+        virtual = Tool(
+            org_id=caller.org_id, name=ep["id"], owner=caller.email,
+            base_url=provider.base_url, host=_host_of(provider.base_url), bindings=[],
+        )
+        return MarketplaceCall(
+            tool=virtual, tier="anonymous", **{
+                **common, "cost_type": "free", "estimate_micro": 0, "unit_micro": 0,
+            },
+        )
+
     # tier 4 — treg's own key, metered against the org's balance. Shadowed by tiers 1 and 2 above:
     # an org that brought its own credential is billed by the provider, not by us, and must never be
     # silently switched onto our key (their quota, their rate limits, their data agreements).
     cost = _platform_offer(ep, provider, caller.org)
     async_owner_call_id = None
     if cost is not None:
-        _enforce_platform_pricing_selectors(ep, body)
+        _enforce_platform_request(ep, body)
+        if service == "sumble":
+            from . import sumble
+            sumble.enforce(ep, _strict_json_object(body, ep["id"]) if has_body else {}, query)
+        if service == "contactout":
+            # Fixed catalog splits must not silently fall into ContactOut's personal+work default.
+            inputs = ep.get("input") or {}
+            values = _json_object(body) if body else dict(query.multi_items())
+            if ep["id"] == "contactout.people.search.reveal":
+                size = values.get("page_size")
+                if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 25:
+                    raise ResolutionFailed("catalog_parameter_invalid", status_code=400, detail={
+                        "error": "catalog_parameter_invalid", "endpoint_id": ep["id"],
+                        "parameter": "page_size",
+                        "message": "Specify page_size from 1 to 25; each result reserves up to $0.67.",
+                    })
+            for name, spec in (inputs.get("body") or inputs.get("queryParams") or {}).items():
+                if not isinstance(spec, dict) or not spec.get("required") or len(spec.get("enum", [])) != 1:
+                    continue
+                expected, actual = spec["enum"][0], values.get(name)
+                if isinstance(expected, bool) and isinstance(actual, str):
+                    actual = actual.lower() == "true" if actual.lower() in ("true", "false") else actual
+                if actual != expected:
+                    raise ResolutionFailed("catalog_parameter_invalid", status_code=400, detail={
+                        "error": "catalog_parameter_invalid", "endpoint_id": ep["id"],
+                        "parameter": name, "expected": expected,
+                        "message": f"{ep['id']} requires {name}={expected!r}; use the matching catalog tool.",
+                    })
         async_owner_call_id = await _enforce_platform_async_ownership(ep, query, caller, db)
     skip_direct = False
     probe_lock_id = None
@@ -1359,14 +1703,18 @@ def _provider_capacity_unavailable(ep: dict, service: str, resets, *,
                                    probing: bool = False) -> ResolutionFailed:
     """The typed floor (plan §4.5): no charge, `resets_at` when known, and the same-capability
     alternatives — treg names them and leaves the choice to the caller (charter: no failover)."""
+    # Say what treg is doing about it before what the caller could do: an agent quotes the first
+    # imperative line back to its user, and "use your own key" read as "your plan lost access"
+    # (2026-09-17). Nothing about the caller's plan or balance changed.
     lines = [f"treg's own {service} account is out of capacity right now — {ep['id']} can't be "
-             f"served on treg's key" + (f" until about {resets:%Y-%m-%d %H:%M} UTC" if resets else "")]
+             f"served on treg's key" + (f" until about {resets:%Y-%m-%d %H:%M} UTC" if resets else "")
+             + "; nothing about your plan or balance changed and nothing was charged"]
     if probing:
         lines.append("  treg retries the vendor about once a minute and lifts this as soon as it "
                      "answers, so a retry later may succeed")
-    lines.append(f"  use your own key: treg secret add {service} --env-var "
-                 f"{service.upper().replace('-', '_')}_API_KEY  (own keys are never affected)")
     lines.extend(_capability_alternatives(ep))
+    lines.append(f"  or use your own key: treg secret add {service} --env-var "
+                 f"{service.upper().replace('-', '_')}_API_KEY  (own keys are never affected)")
     return ResolutionFailed("provider_capacity", status_code=503, detail={
         "error": "provider_capacity_unavailable", "provider": service, "endpoint_id": ep["id"],
         "resets_at": resets.isoformat() + "Z" if resets else None,
