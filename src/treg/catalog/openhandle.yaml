@@ -51,16 +51,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@instagram'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: instagram.user.profile
   name: 'Instagram: Get a profile'
+  example_response: examples/openhandle.instagram.user.profile.json
+  verified: '2026-09-21'
 - id: openhandle.instagram.user.posts
   platform: instagram
   scope: any_account
@@ -113,16 +116,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@instagram'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: instagram.user.posts
   name: 'Instagram: List profile posts'
+  example_response: examples/openhandle.instagram.user.posts.json
+  verified: '2026-09-21'
 - id: openhandle.instagram.user.reels
   platform: instagram
   scope: any_account
@@ -170,16 +176,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@instagram'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: instagram.user.reels
   name: 'Instagram: List profile reels'
+  example_response: examples/openhandle.instagram.user.reels.json
+  verified: '2026-09-21'
 - id: openhandle.instagram.search.users
   platform: instagram
   scope: any_account
@@ -225,15 +234,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: instagram
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: instagram.search.users
   name: 'Instagram: Search Instagram profiles'
+  example_response: examples/openhandle.instagram.search.users.json
+  verified: '2026-09-21'
 - id: openhandle.instagram.post.detail
   platform: instagram
   scope: any_account
@@ -277,16 +289,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: Dc30nJeRKKz
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: instagram.post.detail
   name: 'Instagram: Get a post'
+  example_response: examples/openhandle.instagram.post.detail.json
+  verified: '2026-09-21'
 - id: openhandle.tiktok.user.profile
   platform: tiktok
   scope: any_account
@@ -330,16 +345,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@tiktok'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: tiktok.user.profile
   name: 'TikTok: Get a profile'
+  example_response: examples/openhandle.tiktok.user.profile.json
+  verified: '2026-09-21'
 - id: openhandle.tiktok.user.videos
   platform: tiktok
   scope: any_account
@@ -392,16 +410,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@tiktok'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: tiktok.user.videos
   name: 'TikTok: List profile posts'
+  example_response: examples/openhandle.tiktok.user.videos.json
+  verified: '2026-09-21'
 - id: openhandle.tiktok.search.users
   platform: tiktok
   scope: any_account
@@ -447,15 +468,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: tiktok
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: tiktok.search.users
   name: 'TikTok: Search Tiktok profiles'
+  example_response: examples/openhandle.tiktok.search.users.json
+  verified: '2026-09-21'
 - id: openhandle.tiktok.search.videos
   platform: tiktok
   scope: any_account
@@ -501,15 +525,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: tiktok
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: tiktok.search.videos
   name: 'TikTok: Search Tiktok posts'
+  example_response: examples/openhandle.tiktok.search.videos.json
+  verified: '2026-09-21'
 - id: openhandle.tiktok.video.detail
   platform: tiktok
   scope: any_account
@@ -553,16 +580,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '7606449212716305678'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: tiktok.video.detail
   name: 'TikTok: Get a post'
+  example_response: examples/openhandle.tiktok.video.detail.json
+  verified: '2026-09-21'
 - id: openhandle.x.user.profile
   platform: x
   scope: any_account
@@ -606,16 +636,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@NASA'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: x.user.profile
   name: 'X: Get a profile'
+  example_response: examples/openhandle.x.user.profile.json
+  verified: '2026-09-21'
 - id: openhandle.x.user.posts
   platform: x
   scope: any_account
@@ -668,16 +701,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '@NASA'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: x.user.posts
   name: 'X: List profile posts'
+  example_response: examples/openhandle.x.user.posts.json
+  verified: '2026-09-21'
 - id: openhandle.x.search.users
   platform: x
   scope: any_account
@@ -723,15 +759,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: NASA
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: x.search.users
   name: 'X: Search Twitter users'
+  example_response: examples/openhandle.x.search.users.json
+  verified: '2026-09-21'
 - id: openhandle.x.search.posts
   platform: x
   scope: any_account
@@ -786,15 +825,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: NASA
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: x.search.posts
   name: 'X: Search Twitter posts'
+  example_response: examples/openhandle.x.search.posts.json
+  verified: '2026-09-21'
 - id: openhandle.x.post.detail
   platform: x
   scope: any_account
@@ -838,16 +880,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: '1808168603721650364'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: x.post.detail
   name: 'X: Get a post'
+  example_response: examples/openhandle.x.post.detail.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.user.profile
   platform: reddit
   scope: any_account
@@ -891,16 +936,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
-      identifier: spez
+      identifier: '@spez'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.user.profile
   name: 'Reddit: Get a profile'
+  example_response: examples/openhandle.reddit.user.profile.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.user.posts
   platform: reddit
   scope: any_account
@@ -977,16 +1025,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
-      identifier: spez
+      identifier: '@spez'
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.user.posts
   name: 'Reddit: List profile posts'
+  example_response: examples/openhandle.reddit.user.posts.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.subreddit.info
   platform: reddit
   scope: any_account
@@ -1030,16 +1081,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: python
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.subreddit.info
   name: 'Reddit: Get a subreddit'
+  example_response: examples/openhandle.reddit.subreddit.info.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.subreddit.posts
   platform: reddit
   scope: any_account
@@ -1117,16 +1171,19 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     pathParams:
       identifier: python
     queryParams:
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.subreddit.posts
   name: 'Reddit: List subreddit posts'
+  example_response: examples/openhandle.reddit.subreddit.posts.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.search.posts
   platform: reddit
   scope: any_account
@@ -1210,15 +1267,18 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: python
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.search.posts
   name: 'Reddit: Search posts'
+  example_response: examples/openhandle.reddit.search.posts.json
+  verified: '2026-09-21'
 - id: openhandle.reddit.search.subreddits
   platform: reddit
   scope: any_account
@@ -1272,12 +1332,15 @@ endpoints:
     note: 'Published prepaid entry rate per answered request: $0.0025 for the first 100,000 requests per
       month, then $0.002. Cache hits cost less: 24h $0.0005, 7d $0.0001, 30d free; cache misses fetch
       and bill Live data. Confirmed not-found and private profiles are billed; invalid input, provider
-      failures and rate limits are not.'
+      failures and rate limits are not. Live data verified 2026-09-21 with freshness=live. Response headers
+      reported Openhandle-Cost: 0.000, Openhandle-List-Price: 0.0025 and Openhandle-Billing-Disposition:
+      allowance. Paid charge unobserved; price remains documented.'
   docs_url: https://openhandle.dev/docs/api-reference
   test_request:
     queryParams:
       q: python
-      freshness: 30d
-  unverified: Imported from OpenAPI; a Live call has not verified this route yet.
+      freshness: live
   capability: reddit.search.subreddits
   name: 'Reddit: Search subreddits'
+  example_response: examples/openhandle.reddit.search.subreddits.json
+  verified: '2026-09-21'

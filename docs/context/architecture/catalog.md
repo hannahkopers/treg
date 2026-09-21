@@ -329,7 +329,14 @@ Invalid input, provider failures and rate limits are free. The catalog's scalar 
 entry rate; discounts are not reconciled from the upstream `Openhandle-Cost` header.
 
 The September 21 refresh removes retired routes and stale September 5 response captures.
-All current entries await Live verification; imported schemas do not prove a successful Live call.
+All 21 core routes returned nonempty Live data on September 21 with `freshness=live`.
+The two Reddit profile fixtures require `@spez`; bare usernames returned 400 `INVALID_IDENTIFIER`.
+Each success reported `Openhandle-Cost: 0.000`, `Openhandle-List-Price: 0.0025`, and
+`Openhandle-Billing-Disposition: allowance`. Route stamps confirm Live data, not paid billing;
+cost provenance remains documented because the trial allowance covered every successful request.
+The 88 extended routes remain unverified. Examples are abbreviated, retaining one item per list,
+resource identifiers, timestamps, metrics and selected public identities. They omit free text,
+private author identities, contact fields, media and pagination cursors; they are not complete schemas.
 Platform-key settings are present, but activation requires maintainers' verification and allow-list.
 
 ## QuickEnrich enrichment (2026-09-08)

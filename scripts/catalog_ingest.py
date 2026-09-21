@@ -1602,8 +1602,8 @@ def ingest_anyapi(refresh: bool = False):
 
 # Real public identifiers for the generated Live `test_request`s. The OpenAPI examples are synthetic
 # fixtures that only answer on Test keys, so a request built from them can never verify a Live
-# route. Instagram values were resolved on 2026-09-05 from @instagram's public posts; TikTok and X
-# values were resolved the same way from @tiktok and @NASA. A route whose required input has no fixture here
+# route. Identifiers point to public profiles and posts; the detail-post authors can differ from
+# the profile fixtures. A route whose required input has no fixture here
 # (effects, playlists, ephemeral stories) gets no test_request and stays unverified.
 OPENHANDLE_FIXTURES = {
     "instagram": {
@@ -1618,7 +1618,7 @@ OPENHANDLE_FIXTURES = {
     "twitter": {
         "profiles": "@NASA", "posts": "1808168603721650364", "comment_id": "1808170286425964893", "q": "NASA", "type": "image",
     },
-    "reddit": {"profiles": "spez", "subreddits": "python", "domains": "python.org",
+    "reddit": {"profiles": "@spez", "subreddits": "python", "domains": "python.org",
                "page": "index", "q": "python"},
     "test-data": {"id": "instagram.profile.northstar-forge", "limit": 1},
     "urls": {"url": "https://www.instagram.com/instagram/"},
